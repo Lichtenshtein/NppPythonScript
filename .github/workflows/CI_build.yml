@@ -1,50 +1,114 @@
-name: Continuous Integration
+name: Build NppPythonScript
 
-on: [push, pull_request]
+on:
+#  push:
+#    tags:
+#      - 'v*'
+#    branches:
+#      - master
+  workflow_dispatch:
 
 jobs:
-  build:
-
+  Test:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
-        build_configuration: [Release, Debug]
+        build_configuration: [Release]
         build_platform: [x64, Win32]
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-      with:
-        submodules: 'true'
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
 
-    - name: Add msbuild to PATH
-      uses: microsoft/setup-msbuild@v2
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
-    - name: Setup NuGet.exe
-      uses: nuget/setup-nuget@v2
+      - name: Setup NuGet.exe
+        uses: nuget/setup-nuget@v2
 
-    - name: Restore
-      working-directory: .
-      run: nuget restore PythonScript.sln
+      - name: Restore
+        run: nuget restore PythonScript.sln
 
-    - name: MSBuild of solution
-      working-directory: .
-      run: msbuild PythonScript.sln /m /verbosity:minimal /p:configuration="${{ matrix.build_configuration }}" /p:platform="${{ matrix.build_platform }}"
+      - name: MSBuild of solution
+        run: msbuild PythonScript.sln /m /verbosity:minimal /p:configuration="${{ matrix.build_configuration }}" /p:platform="${{ matrix.build_platform }}"
 
-    - name: Build docs
-      if: matrix.build_configuration == 'Release'
-      working-directory: docs
-      run: |
-           python -m pip install --upgrade pip
-           pip install -U sphinx
-           .\make.bat html
+      - name: Build docs
+        if: matrix.build_configuration == 'Release'
+        working-directory: docs
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U sphinx
+          .\make.bat html
 
-    - name: Build installer and release zips
-      if: matrix.build_configuration == 'Release'
-      working-directory: installer
-      run: |
-           $env:PYTHONBUILDDIR_X64='${{ github.workspace }}\packages\python.3.12.10\tools'
-           $env:PYTHONBUILDDIR='${{ github.workspace }}\packages\pythonx86.3.12.10\tools'
-           Rename-Item -Path ".\buildPaths.bat.orig" -NewName "buildPaths.bat"
-           dotnet tool install --global wix
-           .\buildAll.bat ${{ matrix.build_platform }}
+      - name: Build installer and release zips
+        if: matrix.build_configuration == 'Release'
+        working-directory: installer
+        run: |
+          $env:PYTHONBUILDDIR_X64='${{ github.workspace }}\packages\python.3.12.10\tools'
+          $env:PYTHONBUILDDIR='${{ github.workspace }}\packages\pythonx86.3.12.10\tools'
+          if (Test-Path ".\buildPaths.bat.orig") { Rename-Item -Path ".\buildPaths.bat.orig" -NewName "buildPaths.bat" }
+          dotnet tool install --global wix
+          .\buildAll.bat ${{ matrix.build_platform }}
+
+      - name: Prepare Artifacts
+        shell: pwsh
+        run: |
+          $tagName = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "latest-build" }
+          
+          $files = Get-ChildItem -Path "installer\build\*" -Include *.zip, *.7z, *.msi -Recurse
+          if ($files.Count -eq 0) { throw "No artifacts found in installer\build!" }
+          
+          mkdir out_assets
+          $files | Copy-Item -Destination out_assets\
+          
+          echo "RELEASE_TAG=$tagName" >> $env:GITHUB_ENV
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.build_platform }}
+          path: out_assets/*
+          retention-days: 1
+
+  publish:
+    needs: Test
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || github.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          merge-multiple: true
+
+      - name: Set Release Tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "RELEASE_TAG=latest-build" >> $GITHUB_ENV
+          fi
+
+      - name: Delete Old Release (Auto-builds only)
+        if: github.ref_type != 'tag'
+        uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          delete_release: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
+            *.zip
+            *.7z
+            *.msi
+          generate_release_notes: true
+          prerelease: ${{ github.ref_type != 'tag' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
