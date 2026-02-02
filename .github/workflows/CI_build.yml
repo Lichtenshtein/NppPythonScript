@@ -35,6 +35,31 @@ jobs:
       - name: MSBuild of solution
         run: msbuild PythonScript.sln /m /verbosity:minimal /p:configuration="${{ matrix.build_configuration }}" /p:platform="${{ matrix.build_platform }}"
 
+      - name: Download Additional Scripts (PyPadPlusPlus & pyscFilteredViewer)
+        shell: pwsh
+        run: |
+          $scriptsDir = "scripts"
+          if (!(Test-Path $scriptsDir)) { mkdir $scriptsDir }
+
+          Write-Host "Cloning PyPadPlusPlus..."
+          git clone --depth 1 https://github.com/bitagoras/PyPadPlusPlus tmp_pypad
+          
+          if (Test-Path "tmp_pypad\demo") { 
+              Write-Host "Removing demo folder..."
+              Remove-Item -Path "tmp_pypad\demo" -Recurse -Force
+              Remove-Item -Path "tmp_pypad\.git" -Recurse -Force
+          }
+          
+          mkdir "$scriptsDir\PyPadPlusPlus" -ErrorAction SilentlyContinue
+          Copy-Item -Path "tmp_pypad\*" -Destination "$scriptsDir\PyPadPlusPlus\" -Recurse -Force
+
+          Write-Host "Cloning pyscFilteredViewer..."
+          git clone --depth 1 https://github.com/pryrt/pyscFilteredViewer tmp_filteredviewer
+          
+          Copy-Item -Path "tmp_filteredviewer\pyscFilteredViewer" -Destination "$scriptsDir\" -Recurse -Force
+          
+          Remove-Item -Path "tmp_pypad", "tmp_filteredviewer" -Recurse -Force
+
       - name: Build docs
         if: matrix.build_configuration == 'Release'
         working-directory: docs
