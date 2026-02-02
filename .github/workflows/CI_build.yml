@@ -58,11 +58,19 @@ jobs:
         run: |
           $tagName = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "latest-build" }
           
-          $files = Get-ChildItem -Path "installer\build\*" -Include *.zip, *.7z, *.msi -Recurse
-          if ($files.Count -eq 0) { throw "No artifacts found in installer\build!" }
-          
           mkdir out_assets
-          $files | Copy-Item -Destination out_assets\
+          
+          # 1. Select the Min version (usually .7z or .zip "zip|7z", as configured in the bat)
+          # 2. Select Full... PluginAdmin.zip
+          $patterns = @("*Full*", "*Min*")
+          $files = Get-ChildItem -Path "installer\build\*" -Include $patterns -Recurse | Where-Object { $_.Extension -match "7z" }
+          
+          if ($files.Count -eq 0) { throw "Required artifacts (Min or PluginAdmin) not found!" }
+          
+          foreach ($file in $files) {
+              Write-Host "Selecting for release: $($file.FullName)"
+              Copy-Item -Path $file.FullName -Destination "out_assets\"
+          }
           
           echo "RELEASE_TAG=$tagName" >> $env:GITHUB_ENV
 
